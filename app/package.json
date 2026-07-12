@@ -1,0 +1,14 @@
+{
+  "name": "request-cycle-monitor",
+  "version": "0.1.0",
+  "description": "Monitor & modify your outgoing/incoming network requests; block spyware and telemetry. Local decrypting proxy with a UI and system-tray.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^32.2.0"
+  }
+}

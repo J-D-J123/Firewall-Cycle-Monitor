@@ -1,0 +1,19 @@
+# Python
+engine/.venv/
+__pycache__/
+*.pyc
+
+# Node / Electron
+app/node_modules/
+app/dist/
+
+# Runtime data (created while the app runs)
+logs/
+config/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local Claude Code config (machine-specific)
+.claude/

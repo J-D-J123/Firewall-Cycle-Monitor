@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <!-- No restrictive CSP meta here: this page is loaded via file:// where the
+       origin is opaque, so a 'self'-based policy blocks the local styles.css and
+       app.js. The app only loads its own bundled assets and connects to the
+       local engine on 127.0.0.1. -->
+  <title>Request Cycle Monitor</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="status-pills" id="statusPills">
+      <span class="pill" id="pill-proxy">proxy …</span>
+      <span class="pill" id="pill-system">system proxy …</span>
+      <span class="pill" id="pill-cert">certificate …</span>
+      <span class="pill" id="pill-focus">all apps</span>
+    </div>
+    <div class="top-actions">
+      <button id="btnPause" class="btn btn-warn">Pause</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="apps">Apps</button>
+    <button class="tab" data-tab="live">Live</button>
+    <button class="tab" data-tab="rules">Rules &amp; Blocking</button>
+    <button class="tab" data-tab="activity">Activity</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+
+  <main>
+    <!-- APPS DASHBOARD -------------------------------------------------- -->
+    <section id="tab-apps" class="tab-panel active">
+      <div class="toolbar">
+        <input id="appsFilter" class="input" type="text" placeholder="Filter apps…" />
+        <button id="btnUnsolo" class="btn btn-sm" hidden>Exit “only this app” mode</button>
+        <span class="counters" id="appsBanner"></span>
+        <button id="btnRefreshApps" class="btn btn-ghost btn-sm">Refresh</button>
+      </div>
+      <div class="toolbar apps-chips">
+        <span class="chips" id="appsCatFilters">
+          <span class="chips-label">Type:</span>
+          <button class="chip active" data-cat="all">All <span class="chip-n"></span></button>
+          <button class="chip" data-cat="app">Apps <span class="chip-n"></span></button>
+          <button class="chip" data-cat="system">System <span class="chip-n"></span></button>
+          <button class="chip" data-cat="unknown">Unknown <span class="chip-n"></span></button>
+        </span>
+        <span class="chips" id="appsStatusFilters">
+          <span class="chips-label">Status:</span>
+          <button class="chip active" data-status="all">Any <span class="chip-n"></span></button>
+          <button class="chip" data-status="new">New <span class="chip-n"></span></button>
+          <button class="chip" data-status="allowed">Allowed <span class="chip-n"></span></button>
+          <button class="chip" data-status="blocked">Blocked <span class="chip-n"></span></button>
+        </span>
+      </div>
+      <div id="appsNote" class="muted small" style="margin-bottom:10px"></div>
+      <div id="appsGrid" class="apps-groups"></div>
+    </section>
+
+    <!-- LIVE ------------------------------------------------------------ -->
+    <section id="tab-live" class="tab-panel">
+      <div class="toolbar">
+        <input id="liveFilter" class="input" type="text" placeholder="Filter by host, app or path…" />
+        <label class="check"><input type="checkbox" id="autoScroll" checked /> Auto-scroll</label>
+        <span class="counters" id="liveCounters"></span>
+        <button id="btnClearLive" class="btn btn-ghost">Clear</button>
+      </div>
+      <div class="live-wrap">
+        <div class="table-scroll">
+          <table class="grid" id="liveTable">
+            <thead>
+              <tr>
+                <th style="width:80px">Time</th>
+                <th style="width:150px">App</th>
+                <th style="width:60px">Method</th>
+                <th>Host / path</th>
+                <th style="width:70px">Status</th>
+                <th style="width:110px">Action</th>
+              </tr>
+            </thead>
+            <tbody id="liveBody"></tbody>
+          </table>
+        </div>
+        <aside class="detail" id="detail" hidden>
+          <div class="detail-head">
+            <strong id="detailTitle">Request detail</strong>
+            <button class="btn btn-ghost btn-sm" id="detailClose">✕</button>
+          </div>
+          <div class="detail-body" id="detailBody"></div>
+          <div class="detail-foot">
+            <button class="btn btn-sm" id="btnReplay">Edit &amp; replay request</button>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- RULES ----------------------------------------------------------- -->
+    <section id="tab-rules" class="tab-panel">
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-head"><h2>Protection level</h2>
+          <span class="pill" id="profilePill">…</span></div>
+        <p class="muted small">One-click presets. Pick how aggressive the blocking should be — you can still fine-tune the lists below (that becomes “Custom”).</p>
+        <div id="profileGrid" class="profile-grid"></div>
+      </div>
+      <div class="cols">
+        <div class="card grow">
+          <div class="card-head">
+            <h2>Rules</h2>
+            <button id="btnAddRule" class="btn btn-primary btn-sm">+ Add rule</button>
+          </div>
+          <p class="muted small">Rules apply top-to-bottom. A “block” stops the request; header/body edits change what is sent or received.</p>
+          <div id="rulesList" class="rules-list"></div>
+        </div>
+        <div class="card" style="width:360px">
+          <div class="card-head"><h2>Block lists</h2></div>
+          <p class="muted small">Curated spyware / telemetry / ad hosts. Toggle a category to block every host in it.</p>
+          <div id="blocklists"></div>
+          <label class="field-label" style="margin-top:12px">Custom blocked hosts (one per line)</label>
+          <textarea id="customHosts" class="input" rows="5" placeholder="tracker.example.com"></textarea>
+          <button id="btnSaveBlock" class="btn btn-sm" style="margin-top:8px">Save block lists</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOGS ------------------------------------------------------------ -->
+    <section id="tab-logs" class="tab-panel">
+      <div class="cols">
+        <div class="card" style="width:320px">
+          <div class="card-head"><h2>Sessions</h2>
+            <span style="display:flex; gap:6px">
+              <button id="btnLogsBack" class="btn btn-ghost btn-sm">‹ Settings</button>
+              <button id="btnRefreshSessions" class="btn btn-ghost btn-sm">Refresh</button>
+            </span></div>
+          <p class="muted small">Each time you launch the monitor a new session log is written.</p>
+          <div id="sessionList" class="list"></div>
+        </div>
+        <div class="card grow">
+          <div class="card-head"><h2 id="sessionTitle">Session log</h2></div>
+          <div class="table-scroll">
+            <table class="grid">
+              <thead><tr><th style="width:90px">Time</th><th style="width:70px">Type</th><th>Host / path</th><th style="width:130px">App</th><th style="width:70px">Status</th></tr></thead>
+              <tbody id="sessionBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACTIVITY -------------------------------------------------------- -->
+    <section id="tab-activity" class="tab-panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>System activity</h2>
+          <select id="activityDay" class="input" style="width:180px"></select>
+        </div>
+        <p class="muted small">Every app launch and new network connection observed on this PC while the monitor was running.</p>
+        <div class="table-scroll">
+          <table class="grid">
+            <thead><tr><th style="width:100px">Time</th><th style="width:90px">Event</th><th style="width:200px">App</th><th>Details</th></tr></thead>
+            <tbody id="activityBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -------------------------------------------------------- -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="cols wrap">
+        <div class="card" style="width:420px">
+          <div class="card-head"><h2>Activity</h2>
+            <button id="btnViewActivity" class="btn btn-ghost btn-sm">Full activity ›</button></div>
+          <div class="stat-row">
+            <div class="stat"><div class="stat-n bad" id="statBlocked">0</div><div class="stat-l">blocked requests</div></div>
+            <div class="stat"><div class="stat-n" id="statRequests">0</div><div class="stat-l">total requests</div></div>
+          </div>
+          <label class="field-label">Top processes by traffic (all time)</label>
+          <div id="topApps" class="top-apps"><div class="muted small">No traffic yet.</div></div>
+        </div>
+
+        <div class="card" style="width:420px">
+          <div class="card-head"><h2>Proxy</h2></div>
+          <div class="row-between">
+            <div><strong>Route system traffic through the monitor</strong>
+              <div class="muted small" id="proxyServerLine">—</div></div>
+            <label class="switch"><input type="checkbox" id="tglSystemProxy" /><span></span></label>
+          </div>
+          <p class="muted small">When on, Windows sends browser &amp; app traffic through the local proxy so it can be inspected, modified and blocked.</p>
+        </div>
+
+        <div class="card" style="width:420px">
+          <div class="card-head"><h2>Startup</h2></div>
+          <div class="row-between">
+            <div><strong>Launch when I sign in to Windows</strong>
+              <div class="muted small" id="startupLine">—</div></div>
+            <label class="switch"><input type="checkbox" id="tglStartup" /><span></span></label>
+          </div>
+          <p class="muted small">Starts automatically and minimized to the tray each time you sign in. Uses your per-user startup entry, so it never asks for administrator rights — but at login it runs without elevation, so per-app firewall blocking stays limited until you relaunch it normally.</p>
+        </div>
+
+        <div class="card" style="width:420px">
+          <div class="card-head"><h2>Focus: current app only</h2></div>
+          <div class="row-between">
+            <div><strong>Only the app I'm using</strong>
+              <div class="muted small" id="focusLine">—</div></div>
+            <label class="switch"><input type="checkbox" id="tglCurrentApp" /><span></span></label>
+          </div>
+          <label class="field-label" style="margin-top:10px">Focus behaviour</label>
+          <select id="focusMode" class="input">
+            <option value="enforce">Enforce on current app (feed shows everything)</option>
+            <option value="monitor">Monitor current app only (feed shows only it)</option>
+          </select>
+        </div>
+
+        <div class="card" style="width:420px">
+          <div class="card-head"><h2>Guard new apps</h2></div>
+          <div class="row-between">
+            <div><strong>Block apps I haven't approved</strong>
+              <div class="muted small" id="guardLine">—</div></div>
+            <label class="switch"><input type="checkbox" id="tglGuard" /><span></span></label>
+          </div>
+          <p class="muted small">When a program you've never allowed before tries to use the network, its traffic is blocked and a prompt appears in the corner so you can allow or block it. Core Windows system processes are exempt.</p>
+        </div>
+
+        <div class="card" style="width:420px">
+          <div class="card-head"><h2>HTTPS certificate</h2></div>
+          <p class="muted small">To read &amp; modify HTTPS, Windows must trust the monitor's local certificate. This only affects your PC and is fully reversible.</p>
+          <div class="row-between">
+            <div class="muted small" id="certLine">—</div>
+          </div>
+          <div style="margin-top:10px; display:flex; gap:8px">
+            <button id="btnInstallCert" class="btn btn-primary btn-sm">Install &amp; trust</button>
+            <button id="btnUninstallCert" class="btn btn-ghost btn-sm">Remove trust</button>
+          </div>
+          <div id="certMsg" class="muted small" style="margin-top:8px"></div>
+        </div>
+
+        <div class="card" style="width:420px">
+          <div class="card-head"><h2>Logs</h2></div>
+          <p class="muted small">Per-session request history is recorded here. Open the viewer to browse past sessions, or open the folder on disk.</p>
+          <div class="muted small" id="logPathLine">—</div>
+          <div style="margin-top:10px; display:flex; gap:8px">
+            <button id="btnViewLogs" class="btn btn-primary btn-sm">View session logs</button>
+            <button id="btnOpenLogs" class="btn btn-sm">Open logs folder</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Rule editor modal ------------------------------------------------- -->
+  <div id="ruleModal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="card-head"><h2 id="ruleModalTitle">Add rule</h2>
+        <button class="btn btn-ghost btn-sm" id="ruleModalClose">✕</button></div>
+      <input type="hidden" id="ruleId" />
+      <label class="field-label">Name</label>
+      <input id="ruleName" class="input" placeholder="e.g. Block ad network" />
+
+      <div class="cols">
+        <div class="grow">
+          <label class="field-label">Host (glob, e.g. *.doubleclick.net)</label>
+          <input id="ruleHost" class="input" placeholder="*" />
+        </div>
+        <div style="width:120px">
+          <label class="field-label">Method</label>
+          <select id="ruleMethod" class="input">
+            <option value="">Any</option><option>GET</option><option>POST</option>
+            <option>PUT</option><option>DELETE</option><option>PATCH</option><option>HEAD</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="field-label">URL matches (optional regex)</label>
+      <input id="ruleUrl" class="input" placeholder="e.g. /track|/collect" />
+
+      <div class="cols">
+        <div class="grow">
+          <label class="field-label">Applies to app</label>
+          <select id="ruleScope" class="input">
+            <option value="all">All apps</option>
+            <option value="current">Current (foreground) app</option>
+            <option value="exe">Specific program…</option>
+          </select>
+        </div>
+        <div class="grow" id="ruleExeWrap" hidden>
+          <label class="field-label">Program (exe name)</label>
+          <input id="ruleExe" class="input" placeholder="chrome.exe" />
+        </div>
+      </div>
+
+      <label class="field-label">Action</label>
+      <select id="ruleAction" class="input">
+        <option value="block">Block the request</option>
+        <option value="modify_headers">Add / remove headers</option>
+        <option value="modify_body">Find &amp; replace in body</option>
+        <option value="redirect">Redirect to another URL</option>
+        <option value="delay">Delay the request</option>
+      </select>
+
+      <div id="paramsBlock" class="params">
+        <label class="field-label">Status code</label>
+        <input id="pStatus" class="input" type="number" value="403" />
+      </div>
+      <div id="paramsHeaders" class="params" hidden>
+        <label class="field-label">Target</label>
+        <select id="hTarget" class="input"><option value="request">Request (outgoing)</option><option value="response">Response (incoming)</option></select>
+        <label class="field-label">Set headers (Name: value, one per line)</label>
+        <textarea id="hSet" class="input" rows="3" placeholder="User-Agent: custom"></textarea>
+        <label class="field-label">Remove headers (one name per line)</label>
+        <textarea id="hRemove" class="input" rows="2" placeholder="Cookie"></textarea>
+      </div>
+      <div id="paramsBody" class="params" hidden>
+        <label class="field-label">Target</label>
+        <select id="bTarget" class="input"><option value="request">Request (outgoing)</option><option value="response">Response (incoming)</option></select>
+        <label class="field-label">Find</label>
+        <input id="bFind" class="input" />
+        <label class="field-label">Replace with</label>
+        <input id="bReplace" class="input" />
+        <label class="check"><input type="checkbox" id="bRegex" /> Treat “find” as a regular expression</label>
+      </div>
+      <div id="paramsRedirect" class="params" hidden>
+        <label class="field-label">Redirect to URL</label>
+        <input id="rUrl" class="input" placeholder="https://example.org/safe" />
+      </div>
+      <div id="paramsDelay" class="params" hidden>
+        <label class="field-label">Delay (milliseconds)</label>
+        <input id="dMs" class="input" type="number" value="500" />
+      </div>
+
+      <div class="modal-foot">
+        <label class="check"><input type="checkbox" id="ruleEnabled" checked /> Enabled</label>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" id="ruleCancel">Cancel</button>
+        <button class="btn btn-primary" id="ruleSave">Save rule</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New-app guard notifications (corner stack) ----------------------- -->
+  <div id="guardStack" class="guard-stack"></div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

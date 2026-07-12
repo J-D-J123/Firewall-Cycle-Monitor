@@ -1,0 +1,5 @@
+mitmproxy>=11,<13
+fastapi>=0.110
+uvicorn[standard]>=0.27
+psutil>=5.9
+pywin32>=306; sys_platform == "win32"
