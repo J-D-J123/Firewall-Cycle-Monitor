@@ -168,6 +168,9 @@ class MonitorAddon:
             event["blocked"] = True
             event["action"] = "blocked"
             event["reason"] = decision.block_reason
+            # Surface the status we return so the live feed can show it (e.g. 403)
+            # right away, even though a blocked flow makes no upstream request.
+            event["status"] = decision.block_status
             self.ctx.bump("blocked")
         elif modified:
             event["action"] = "modified"

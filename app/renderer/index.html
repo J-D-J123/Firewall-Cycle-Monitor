@@ -150,7 +150,19 @@
 
     <!-- ACTIVITY -------------------------------------------------------- -->
     <section id="tab-activity" class="tab-panel">
-      <div class="card">
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head"><h2>Activity</h2>
+          <button id="btnViewActivity" class="btn btn-ghost btn-sm">System activity ↓</button></div>
+        <div class="stat-row">
+          <div class="stat"><div class="stat-n" id="statRequests">0</div><div class="stat-l">total requests</div></div>
+          <div class="stat"><div class="stat-n ok" id="statAllowed">0</div><div class="stat-l">allowed through</div></div>
+          <div class="stat"><div class="stat-n bad" id="statBlocked">0</div><div class="stat-l">blocked requests</div></div>
+        </div>
+        <label class="field-label">Top processes by traffic (all time)</label>
+        <div id="topApps" class="top-apps"><div class="muted small">No traffic yet.</div></div>
+      </div>
+
+      <div class="card" id="systemActivity">
         <div class="card-head">
           <h2>System activity</h2>
           <select id="activityDay" class="input" style="width:180px"></select>
@@ -167,82 +179,78 @@
 
     <!-- SETTINGS -------------------------------------------------------- -->
     <section id="tab-settings" class="tab-panel">
-      <div class="cols wrap">
-        <div class="card" style="width:420px">
-          <div class="card-head"><h2>Activity</h2>
-            <button id="btnViewActivity" class="btn btn-ghost btn-sm">Full activity ›</button></div>
-          <div class="stat-row">
-            <div class="stat"><div class="stat-n bad" id="statBlocked">0</div><div class="stat-l">blocked requests</div></div>
-            <div class="stat"><div class="stat-n" id="statRequests">0</div><div class="stat-l">total requests</div></div>
+      <div class="settings-wrap">
+
+        <h3 class="settings-h">Protection</h3>
+        <div class="settings-grid">
+          <div class="card">
+            <div class="card-head"><h2>Proxy</h2></div>
+            <div class="row-between">
+              <div><strong>Route system traffic through the monitor</strong>
+                <div class="muted small" id="proxyServerLine">—</div></div>
+              <label class="switch"><input type="checkbox" id="tglSystemProxy" /><span></span></label>
+            </div>
+            <p class="muted small">When on, Windows sends browser &amp; app traffic through the local proxy so it can be inspected, modified and blocked.</p>
           </div>
-          <label class="field-label">Top processes by traffic (all time)</label>
-          <div id="topApps" class="top-apps"><div class="muted small">No traffic yet.</div></div>
+
+          <div class="card">
+            <div class="card-head"><h2>Startup</h2></div>
+            <div class="row-between">
+              <div><strong>Launch when I sign in to Windows</strong>
+                <div class="muted small" id="startupLine">—</div></div>
+              <label class="switch"><input type="checkbox" id="tglStartup" /><span></span></label>
+            </div>
+            <p class="muted small">Starts automatically at sign-in, minimized to the tray. It asks for administrator access <b>each time</b> (needed for real per-app firewall blocking). While this is on, all network traffic is <b>blocked at startup until the proxy is active</b>, so nothing leaks before protection is up. Turning the switch on/off doesn't need admin.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Focus: current app only</h2></div>
+            <div class="row-between">
+              <div><strong>Only the app I'm using</strong>
+                <div class="muted small" id="focusLine">—</div></div>
+              <label class="switch"><input type="checkbox" id="tglCurrentApp" /><span></span></label>
+            </div>
+            <label class="field-label" style="margin-top:10px">Focus behaviour</label>
+            <select id="focusMode" class="input">
+              <option value="enforce">Enforce on current app (feed shows everything)</option>
+              <option value="monitor">Monitor current app only (feed shows only it)</option>
+            </select>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Guard new apps</h2></div>
+            <div class="row-between">
+              <div><strong>Block apps I haven't approved</strong>
+                <div class="muted small" id="guardLine">—</div></div>
+              <label class="switch"><input type="checkbox" id="tglGuard" /><span></span></label>
+            </div>
+            <p class="muted small">When a program you've never allowed before tries to use the network, its traffic is blocked and a prompt appears in the corner so you can allow or block it. Core Windows system processes are exempt.</p>
+          </div>
         </div>
 
-        <div class="card" style="width:420px">
-          <div class="card-head"><h2>Proxy</h2></div>
-          <div class="row-between">
-            <div><strong>Route system traffic through the monitor</strong>
-              <div class="muted small" id="proxyServerLine">—</div></div>
-            <label class="switch"><input type="checkbox" id="tglSystemProxy" /><span></span></label>
+        <h3 class="settings-h">Certificate &amp; logs</h3>
+        <div class="settings-grid">
+          <div class="card">
+            <div class="card-head"><h2>HTTPS certificate</h2></div>
+            <p class="muted small">To read &amp; modify HTTPS, Windows must trust the monitor's local certificate. This only affects your PC and is fully reversible.</p>
+            <div class="row-between">
+              <div class="muted small" id="certLine">—</div>
+            </div>
+            <div style="margin-top:10px; display:flex; gap:8px">
+              <button id="btnInstallCert" class="btn btn-primary btn-sm">Install &amp; trust</button>
+              <button id="btnUninstallCert" class="btn btn-ghost btn-sm">Remove trust</button>
+            </div>
+            <div id="certMsg" class="muted small" style="margin-top:8px"></div>
           </div>
-          <p class="muted small">When on, Windows sends browser &amp; app traffic through the local proxy so it can be inspected, modified and blocked.</p>
-        </div>
 
-        <div class="card" style="width:420px">
-          <div class="card-head"><h2>Startup</h2></div>
-          <div class="row-between">
-            <div><strong>Launch when I sign in to Windows</strong>
-              <div class="muted small" id="startupLine">—</div></div>
-            <label class="switch"><input type="checkbox" id="tglStartup" /><span></span></label>
-          </div>
-          <p class="muted small">Starts automatically at sign-in, minimized to the tray. It asks for administrator access <b>each time</b> (needed for real per-app firewall blocking). While this is on, all network traffic is <b>blocked at startup until the proxy is active</b>, so nothing leaks before protection is up. Turning the switch on/off doesn't need admin.</p>
-        </div>
-
-        <div class="card" style="width:420px">
-          <div class="card-head"><h2>Focus: current app only</h2></div>
-          <div class="row-between">
-            <div><strong>Only the app I'm using</strong>
-              <div class="muted small" id="focusLine">—</div></div>
-            <label class="switch"><input type="checkbox" id="tglCurrentApp" /><span></span></label>
-          </div>
-          <label class="field-label" style="margin-top:10px">Focus behaviour</label>
-          <select id="focusMode" class="input">
-            <option value="enforce">Enforce on current app (feed shows everything)</option>
-            <option value="monitor">Monitor current app only (feed shows only it)</option>
-          </select>
-        </div>
-
-        <div class="card" style="width:420px">
-          <div class="card-head"><h2>Guard new apps</h2></div>
-          <div class="row-between">
-            <div><strong>Block apps I haven't approved</strong>
-              <div class="muted small" id="guardLine">—</div></div>
-            <label class="switch"><input type="checkbox" id="tglGuard" /><span></span></label>
-          </div>
-          <p class="muted small">When a program you've never allowed before tries to use the network, its traffic is blocked and a prompt appears in the corner so you can allow or block it. Core Windows system processes are exempt.</p>
-        </div>
-
-        <div class="card" style="width:420px">
-          <div class="card-head"><h2>HTTPS certificate</h2></div>
-          <p class="muted small">To read &amp; modify HTTPS, Windows must trust the monitor's local certificate. This only affects your PC and is fully reversible.</p>
-          <div class="row-between">
-            <div class="muted small" id="certLine">—</div>
-          </div>
-          <div style="margin-top:10px; display:flex; gap:8px">
-            <button id="btnInstallCert" class="btn btn-primary btn-sm">Install &amp; trust</button>
-            <button id="btnUninstallCert" class="btn btn-ghost btn-sm">Remove trust</button>
-          </div>
-          <div id="certMsg" class="muted small" style="margin-top:8px"></div>
-        </div>
-
-        <div class="card" style="width:420px">
-          <div class="card-head"><h2>Logs</h2></div>
-          <p class="muted small">Per-session request history is recorded here. Open the viewer to browse past sessions, or open the folder on disk.</p>
-          <div class="muted small" id="logPathLine">—</div>
-          <div style="margin-top:10px; display:flex; gap:8px">
-            <button id="btnViewLogs" class="btn btn-primary btn-sm">View session logs</button>
-            <button id="btnOpenLogs" class="btn btn-sm">Open logs folder</button>
+          <div class="card">
+            <div class="card-head"><h2>Logs</h2></div>
+            <p class="muted small">Per-session request history is recorded here. Open the viewer to browse past sessions, or open the folder on disk.</p>
+            <div class="muted small" id="logPathLine">—</div>
+            <div style="margin-top:10px; display:flex; gap:8px">
+              <button id="btnViewLogs" class="btn btn-primary btn-sm">View session logs</button>
+              <button id="btnOpenLogs" class="btn btn-sm">Open logs folder</button>
+            </div>
           </div>
         </div>
       </div>

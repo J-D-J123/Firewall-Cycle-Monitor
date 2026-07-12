@@ -117,7 +117,7 @@ function createWindow() {
     minHeight: 560,
     title: "Request Cycle Monitor",
     icon: path.join(__dirname, "assets", "icon-256.png"),
-    backgroundColor: "#c0c0c0",
+    backgroundColor: "#f4f5f7",
     autoHideMenuBar: true,
     show: false,
     webPreferences: {

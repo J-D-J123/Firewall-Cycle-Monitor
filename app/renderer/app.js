@@ -44,6 +44,9 @@ let appsFilter = "";
 let appsCat = "all";      // all | app | system | unknown
 let appsStatus = "all";   // all | new | allowed | blocked
 let appsData = null;
+// Which category sections / vendor groups the user has collapsed. Kept across
+// the periodic re-render so a minimized group stays minimized.
+const collapsedGroups = new Set();
 
 const CAT_LABELS = { app: "Applications", system: "System processes", unknown: "Unknown processes" };
 const CAT_ORDER = ["app", "system", "unknown"];
@@ -111,20 +114,34 @@ function renderApps() {
     const list = groups[key];
     if (!list.length) return;
     any = true;
-    const section = el("div", "apps-section");
+    const gkey = "cat:" + key;
+    const section = el("div", "apps-section" + (collapsedGroups.has(gkey) ? " collapsed" : ""));
     const head = el("div", "apps-section-head");
-    head.innerHTML = `<span>${CAT_LABELS[key]}</span><span class="muted small">${list.length}</span>`;
+    head.innerHTML =
+      `<span class="grp-title"><span class="apps-caret">▾</span>${CAT_LABELS[key]}</span>` +
+      `<span class="muted small">${list.length}</span>`;
+    const body = el("div", "apps-section-body");
+    renderCategory(body, list, key);
+    head.addEventListener("click", () => toggleGroup(section, gkey));
     section.appendChild(head);
-    renderCategory(section, list);
+    section.appendChild(body);
     grid.appendChild(section);
   });
   if (!any) grid.appendChild(el("div", "muted small", "No apps match these filters."));
 }
 
+// Collapse/expand a category section or vendor group, remembering the choice so
+// the next auto-refresh doesn't pop it back open.
+function toggleGroup(node, key) {
+  const collapsed = node.classList.toggle("collapsed");
+  if (collapsed) collapsedGroups.add(key);
+  else collapsedGroups.delete(key);
+}
+
 // Within a category, collapse a vendor's multiple processes (e.g. Norton's
 // several services) under one sub-heading. Single-process vendors and apps with
 // no known vendor render as plain cards above the grouped ones.
-function renderCategory(section, list) {
+function renderCategory(section, list, catKey) {
   const byVendor = new Map();
   list.forEach((a) => {
     const label = (a.group || "").trim();
@@ -144,12 +161,18 @@ function renderCategory(section, list) {
   }
   subGroups.sort((a, b) => a.label.localeCompare(b.label));
   subGroups.forEach((v) => {
+    const gkey = "cat:" + catKey + ":v:" + v.label.toLowerCase();
+    const grp = el("div", "apps-vendor" + (collapsedGroups.has(gkey) ? " collapsed" : ""));
     const sub = el("div", "apps-subhead");
-    sub.innerHTML = `<span>▸ ${escapeHtml(v.label)}</span><span class="muted small">${v.apps.length} processes</span>`;
-    section.appendChild(sub);
+    sub.innerHTML =
+      `<span class="grp-title"><span class="apps-caret">▾</span>${escapeHtml(v.label)}</span>` +
+      `<span class="muted small">${v.apps.length} processes</span>`;
     const sg = el("div", "apps-grid");
     v.apps.forEach((a) => sg.appendChild(appCard(a)));
-    section.appendChild(sg);
+    sub.addEventListener("click", () => toggleGroup(grp, gkey));
+    grp.appendChild(sub);
+    grp.appendChild(sg);
+    section.appendChild(grp);
   });
 }
 function appCard(a) {
@@ -267,6 +290,14 @@ function setActionCell(tr, f) {
     (f.req.matched && f.req.matched.length ? ` <span class="muted small" title="${escapeHtml(f.req.matched.join(', '))}">•</span>` : "");
   tr.classList.toggle("row-blocked", !!f.req.blocked);
   tr.classList.toggle("row-modified", !f.req.blocked && !!(f.req.modified || (f.resp && f.resp.modified)));
+  // A blocked request never hits the server, so show the status we return (403)
+  // right away so it's obvious in the feed which ones were stopped.
+  if (f.req.blocked && !f.resp) {
+    const sc = tr.querySelector(".status-cell");
+    const code = f.req.status || 403;
+    sc.textContent = code;
+    sc.className = "status-cell mono " + statusClass(code);
+  }
 }
 
 function onEvent(ev) {
@@ -381,6 +412,7 @@ async function pollState() {
     renderPills(s);
     renderQuarantine(s.pending_apps);
     if ($("tab-settings").classList.contains("active")) applyStateToSettings(s);
+    if ($("tab-activity").classList.contains("active")) applyActivity(s);
   } catch (_) { renderOffline(); }
 }
 function pill(id, cls, txt) { const p = $(id); p.className = "pill " + cls; p.textContent = txt; }
@@ -580,6 +612,8 @@ $("btnRefreshSessions").addEventListener("click", loadSessions);
 // Activity
 // ===========================================================================
 async function loadActivity(date) {
+  // Fill the summary (stats + top processes) at the top of the tab right away.
+  if (lastState) applyActivity(lastState);
   const data = await api("/logs/activity" + (date ? "?date=" + encodeURIComponent(date) : ""));
   const sel = $("activityDay");
   if (!sel.dataset.filled || !date) {
@@ -624,13 +658,16 @@ function applyStateToSettings(s) {
   $("certLine").innerHTML = c.available
     ? `CA present: <b>${c.exists ? "yes" : "no"}</b> · trusted by Windows: <b>${c.trusted ? "yes" : "no"}</b>`
     : "Certificate management is Windows-only.";
-  applyActivity(s);
 }
 
 function applyActivity(s) {
   const st = s.stats || {};
-  $("statBlocked").textContent = (st.blocked || 0).toLocaleString();
-  $("statRequests").textContent = (st.requests || 0).toLocaleString();
+  const requests = st.requests || 0;
+  const blocked = st.blocked || 0;
+  const allowed = Math.max(0, requests - blocked);
+  $("statRequests").textContent = requests.toLocaleString();
+  $("statAllowed").textContent = allowed.toLocaleString();
+  $("statBlocked").textContent = blocked.toLocaleString();
   const wrap = $("topApps"); wrap.innerHTML = "";
   const top = s.top_apps || [];
   if (!top.length) { wrap.appendChild(el("div", "muted small", "No traffic yet.")); return; }
@@ -716,7 +753,10 @@ function showPanel(name) {
 }
 $("btnViewLogs").addEventListener("click", () => { showPanel("logs"); loadSessions(); });
 $("btnLogsBack").addEventListener("click", () => { showPanel("settings"); syncSettings(); });
-$("btnViewActivity").addEventListener("click", () => { showPanel("activity"); loadActivity(); });
+$("btnViewActivity").addEventListener("click", () => {
+  const sec = document.getElementById("systemActivity");
+  if (sec) sec.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 
 // ===========================================================================
 // New-app guard — corner notifications for apps blocked on first connection
