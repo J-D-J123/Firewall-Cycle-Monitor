@@ -172,6 +172,20 @@ def create_app(ctx, system_proxy, cert_manager, proxy_controller) -> FastAPI:
         import appsview
         return await asyncio.to_thread(appsview.build_apps, ctx)
 
+    @app.get("/apps/hosts")
+    async def app_hosts(name: str) -> dict[str, Any]:
+        """Every domain a single app has contacted, with request counts, sorted
+        busiest-first. The dashboard caps each app's host list for brevity; the
+        per-app domain blocker uses this to show the full picture."""
+        s = ctx.app_stats_for(name)
+        hosts = sorted(s["hosts"].items(), key=lambda kv: -kv[1])
+        return {
+            "name": name,
+            "requests": s["requests"],
+            "blocked": s["blocked"],
+            "hosts": [{"host": h, "count": n} for h, n in hosts],
+        }
+
     @app.get("/icon")
     async def icon(path: str):
         import icon_extract

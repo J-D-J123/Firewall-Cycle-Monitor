@@ -13,9 +13,10 @@
   <header class="topbar">
     <div class="status-pills" id="statusPills">
       <span class="pill" id="pill-proxy">proxy …</span>
-      <span class="pill" id="pill-system">system proxy …</span>
-      <span class="pill" id="pill-cert">certificate …</span>
-      <span class="pill" id="pill-focus">all apps</span>
+      <span class="pill accent" id="pill-rate">— req/s</span>
+      <span class="pill" id="pill-blocked">— blocked/s</span>
+      <span class="pill" id="pill-pending" hidden></span>
+      <span class="pill" id="pill-focus" hidden></span>
     </div>
     <div class="top-actions">
       <button id="btnPause" class="btn btn-warn">Pause</button>
@@ -342,6 +343,25 @@
         <div style="flex:1"></div>
         <button class="btn btn-ghost" id="ruleCancel">Cancel</button>
         <button class="btn btn-primary" id="ruleSave">Save rule</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Per-app domain blocking modal ----------------------------------- -->
+  <div id="domainModal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="card-head"><h2 id="domainModalTitle">Domains</h2>
+        <button class="btn btn-ghost btn-sm" id="domainModalClose">✕</button></div>
+      <p class="muted small">Block individual domains <b>just for this app</b> — other programs are unaffected. Blocking stops only traffic that goes through the monitor.</p>
+      <div class="domain-add">
+        <input id="domainAddInput" class="input" placeholder="block a domain, e.g. clients4.google.com" />
+        <button id="domainAddBtn" class="btn btn-primary btn-sm">Block</button>
+      </div>
+      <div id="domainCount" class="muted small" style="margin-top:12px"></div>
+      <div id="domainList" class="domain-list"></div>
+      <div class="modal-foot">
+        <div style="flex:1"></div>
+        <button class="btn" id="domainModalDone">Done</button>
       </div>
     </div>
   </div>
