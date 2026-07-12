@@ -196,7 +196,7 @@
               <div class="muted small" id="startupLine">—</div></div>
             <label class="switch"><input type="checkbox" id="tglStartup" /><span></span></label>
           </div>
-          <p class="muted small">Starts automatically and minimized to the tray each time you sign in. Uses your per-user startup entry, so it never asks for administrator rights — but at login it runs without elevation, so per-app firewall blocking stays limited until you relaunch it normally.</p>
+          <p class="muted small">Starts automatically at sign-in, minimized to the tray. It asks for administrator access <b>each time</b> (needed for real per-app firewall blocking). While this is on, all network traffic is <b>blocked at startup until the proxy is active</b>, so nothing leaks before protection is up. Turning the switch on/off doesn't need admin.</p>
         </div>
 
         <div class="card" style="width:420px">

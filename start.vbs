@@ -4,7 +4,7 @@
 ' If the admin prompt is declined, it still launches (with limited blocking).
 Option Explicit
 
-Dim fso, sh, scriptDir, appDir, electronExe
+Dim fso, sh, scriptDir, appDir, electronExe, i, electronArgs
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("Shell.Application")
 
@@ -18,11 +18,18 @@ If Not fso.FileExists(electronExe) Then
     WScript.Quit 1
 End If
 
+' Passed by the launch-at-startup entry: come up minimized to the tray and tell
+' the engine to fail closed (block all outbound until the proxy is up).
+electronArgs = "."
+For i = 0 To WScript.Arguments.Count - 1
+    If LCase(WScript.Arguments(i)) = "/hidden" Then electronArgs = ". --hidden"
+Next
+
 On Error Resume Next
 ' 1 = show the GUI window normally; "runas" triggers the UAC prompt.
-sh.ShellExecute electronExe, ".", appDir, "runas", 1
+sh.ShellExecute electronExe, electronArgs, appDir, "runas", 1
 If Err.Number <> 0 Then
     ' UAC declined or failed - launch without elevation (blocking limited).
     Err.Clear
-    sh.ShellExecute electronExe, ".", appDir, "open", 1
+    sh.ShellExecute electronExe, electronArgs, appDir, "open", 1
 End If

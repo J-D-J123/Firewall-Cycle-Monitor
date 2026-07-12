@@ -39,6 +39,12 @@ def parse_args() -> argparse.Namespace:
         "--no-system-proxy", action="store_true",
         help="Run the local proxy but do not change the Windows system proxy.",
     )
+    ap.add_argument(
+        "--startup-lockdown", action="store_true",
+        help="Fail-closed auto-start: block ALL outbound traffic until the proxy "
+             "is confirmed active (needs admin). Passed by the launch-at-startup "
+             "entry so nothing leaks before protection is up.",
+    )
     return ap.parse_args()
 
 
@@ -64,6 +70,33 @@ def main() -> int:
     proxy_controller = ProxyController(ctx)
     watchers = [ProcessWatcher(ctx), NetstatWatcher(ctx)]
 
+    # 2b) Fail-closed kill-switch. On a normal launch we always clear any stale
+    #     lockdown left by a crashed run (so the machine is never stuck offline).
+    #     On an auto-start (--startup-lockdown) we block ALL outbound *now*,
+    #     before the proxy even starts, and release it once the proxy is
+    #     confirmed intercepting (see the watcher thread below).
+    #     We only fail closed when the proxy is actually expected to come up
+    #     (proxy_enabled); otherwise there'd be nothing to wait for and the
+    #     machine would be stranded offline.
+    import firewall as _firewall
+    _locked = False
+    _want_lockdown = args.startup_lockdown and settings.proxy_enabled and not args.no_system_proxy
+    if _firewall.is_admin():
+        _firewall.lockdown_off()  # crash-recovery: drop any leftover kill-switch
+        if _want_lockdown:
+            res = _firewall.lockdown_on()
+            _locked = bool(res.get("ok"))
+            print(f"[startup] kill-switch engaged (blocking all outbound until "
+                  f"the proxy is active): {res}", file=sys.stderr)
+        elif args.startup_lockdown:
+            print("[startup] --startup-lockdown ignored: proxy is disabled in "
+                  "settings, so there's nothing to fail closed for.",
+                  file=sys.stderr)
+    elif _want_lockdown:
+        print("[startup] --startup-lockdown requested but not elevated; cannot "
+              "install the kill-switch. Accept the admin prompt at sign-in for "
+              "fail-closed startup.", file=sys.stderr)
+
     # 3) start the proxy listener
     proxy_controller.start()
     ready = proxy_controller.wait_ready(timeout=8.0)
@@ -88,6 +121,32 @@ def main() -> int:
             print("[startup] proxy is enabled but the certificate isn't trusted "
                   "yet; leaving the system proxy off. Install & trust it from "
                   "Settings and it will turn on automatically.", file=sys.stderr)
+
+    # 4b) Release-watcher: lift the kill-switch as soon as the proxy is actually
+    #     intercepting (listener up AND the system proxy points at us). Runs in a
+    #     thread so a still-untrusted cert just keeps us safely locked until the
+    #     user installs it (which auto-enables the system proxy) - or quits.
+    if _locked:
+        import threading as _th
+        import time as _t
+
+        def _lockdown_release() -> None:
+            while True:
+                try:
+                    redirected = args.no_system_proxy or \
+                        system_proxy.status().get("pointing_at_us")
+                    if ctx.proxy_active and redirected:
+                        _firewall.lockdown_off()
+                        print("[startup] kill-switch released: proxy is active, "
+                              "traffic now flows through the monitor.",
+                              file=sys.stderr)
+                        return
+                except Exception:
+                    pass
+                _t.sleep(1.0)
+
+        _th.Thread(target=_lockdown_release, daemon=True,
+                   name="lockdown-release").start()
 
     # 5) monitors
     for w in watchers:
@@ -142,6 +201,9 @@ def main() -> int:
             import firewall
             if firewall.is_admin():
                 firewall.clear_all()
+                # Always drop the kill-switch on the way out so quitting the app
+                # (from the tray) is a guaranteed way to restore full network.
+                firewall.lockdown_off()
         except Exception:
             pass
         try:

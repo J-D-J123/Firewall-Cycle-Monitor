@@ -8,7 +8,7 @@
  *  - on quit, asks the engine to restore the system proxy, then tears it down
  */
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, Notification } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const readline = require("readline");
@@ -50,6 +50,9 @@ function startEngine() {
   // Optional safety/testing switch: run the local proxy without changing the
   // Windows system proxy. Set RCM_NO_SYSTEM_PROXY=1 in the environment.
   if (process.env.RCM_NO_SYSTEM_PROXY === "1") args.push("--no-system-proxy");
+  // Auto-start (launched via the elevated launcher with --hidden): tell the
+  // engine to fail closed - block all outbound until the proxy is intercepting.
+  if (startHidden) args.push("--startup-lockdown");
   // Log everything the engine prints to logs/engine.log (the console is hidden).
   const logDir = path.join(PROJECT_ROOT, "logs");
   try { fs.mkdirSync(logDir, { recursive: true }); } catch (_) {}
@@ -214,41 +217,52 @@ function createTray() {
 }
 
 // ---------------------------------------------------------------------------
-// Launch at login (per-user, no admin)
+// Launch at login (per-user Run key -> elevated launcher)
 // ---------------------------------------------------------------------------
-// Windows: setLoginItemSettings writes to HKCU\...\CurrentVersion\Run, which is
-// per-user and never triggers UAC. Because it's the plain Run key, Windows will
-// NOT silently elevate us at login, so an auto-start comes up un-elevated (the
-// firewall-based per-app blocking is limited then, same as declining the UAC
-// prompt today). Everything else — proxy, HTTPS inspection, monitoring — works.
-//
-// Running unpackaged (electron.exe loading this folder), we must register the
-// electron binary plus the absolute app path so login can relaunch us the same
-// way start.vbs does. A packaged build points at its own exe automatically.
-function loginItemOptions() {
-  return app.isPackaged
-    ? { args: ["--hidden"] }
-    : { path: process.execPath, args: [path.resolve(__dirname), "--hidden"] };
+// We register our own value under HKCU\...\CurrentVersion\Run. Writing there is
+// per-user and needs no admin. The command runs start.vbs (via wscript) with
+// /hidden, and start.vbs does a "runas" ShellExecute - so every sign-in shows a
+// UAC prompt and the app comes up elevated (required for the firewall-based
+// per-app blocking and the startup kill-switch) and minimized to the tray.
+const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const RUN_VALUE = "Request Cycle Monitor";
+
+function startupCommand() {
+  const wscript = path.join(process.env.SystemRoot || "C:\\Windows",
+    "System32", "wscript.exe");
+  const vbs = path.join(PROJECT_ROOT, "start.vbs");
+  return `"${wscript}" "${vbs}" /hidden`;
 }
 
-function readLaunchAtLogin() {
-  try {
-    return !!app.getLoginItemSettings(loginItemOptions()).openAtLogin;
-  } catch (_) {
-    return false;
+function runReg(regArgs) {
+  return new Promise((resolve) => {
+    execFile("reg", regArgs, { windowsHide: true }, (err, stdout, stderr) => {
+      resolve({ code: err && typeof err.code === "number" ? err.code : (err ? 1 : 0),
+                stdout: stdout || "", stderr: stderr || "" });
+    });
+  });
+}
+
+async function readLaunchAtLogin() {
+  const r = await runReg(["query", RUN_KEY, "/v", RUN_VALUE]);
+  return r.code === 0 && r.stdout.includes(RUN_VALUE);
+}
+
+async function writeLaunchAtLogin(enabled) {
+  if (enabled) {
+    await runReg(["add", RUN_KEY, "/v", RUN_VALUE, "/t", "REG_SZ",
+      "/d", startupCommand(), "/f"]);
+  } else {
+    await runReg(["delete", RUN_KEY, "/v", RUN_VALUE, "/f"]);
   }
-}
-
-function writeLaunchAtLogin(enabled) {
-  app.setLoginItemSettings({ ...loginItemOptions(), openAtLogin: !!enabled });
   return readLaunchAtLogin();
 }
 
 // ---------------------------------------------------------------------------
 // IPC exposed to the renderer
 // ---------------------------------------------------------------------------
-ipcMain.handle("get-launch-at-login", () => ({ openAtLogin: readLaunchAtLogin() }));
-ipcMain.handle("set-launch-at-login", (_e, enabled) => ({ openAtLogin: writeLaunchAtLogin(enabled) }));
+ipcMain.handle("get-launch-at-login", async () => ({ openAtLogin: await readLaunchAtLogin() }));
+ipcMain.handle("set-launch-at-login", async (_e, enabled) => ({ openAtLogin: await writeLaunchAtLogin(enabled) }));
 ipcMain.handle("get-config", () => ({
   apiBase: API_BASE,
   wsUrl: WS_URL,

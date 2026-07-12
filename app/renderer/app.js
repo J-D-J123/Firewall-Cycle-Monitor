@@ -673,7 +673,7 @@ $("tglGuard").addEventListener("change", async (e) => {
 function paintStartup(on) {
   if (document.activeElement !== $("tglStartup")) $("tglStartup").checked = on;
   $("startupLine").textContent = on
-    ? "On — starts at sign-in, minimized to the tray"
+    ? "On — elevated at sign-in (UAC each time); blocks all traffic until the proxy is up"
     : "Off — start it yourself";
 }
 async function refreshStartup() {
@@ -687,7 +687,7 @@ $("tglStartup").addEventListener("change", async (e) => {
     const r = await window.rcm.setLaunchAtLogin(e.target.checked);
     const on = !!(r && r.openAtLogin);
     paintStartup(on);
-    toast(on ? "Will launch at Windows sign-in" : "Won't launch at startup anymore");
+    toast(on ? "Will launch elevated at sign-in (asks for admin each time)" : "Won't launch at startup anymore");
   } catch (_) {
     toast("Couldn't change the startup setting");
     refreshStartup();
