@@ -17,6 +17,9 @@ import sys
 
 _IS_WINDOWS = sys.platform == "win32"
 GROUP = "RequestCycleMonitor"
+# Separate group for the startup "kill-switch" so it can be applied/removed
+# independently of the per-app blocks.
+LOCKDOWN_GROUP = "RequestCycleMonitorLockdown"
 
 
 def is_admin() -> bool:
@@ -100,3 +103,41 @@ def reapply(paths: list[str]) -> None:
     for p in paths:
         if p:
             block_app(p)
+
+
+# --------------------------------------------------------------------------- #
+# Startup kill-switch (fail-closed): block ALL outbound until the proxy is up.
+# --------------------------------------------------------------------------- #
+def lockdown_on() -> dict:
+    """Block every outbound connection until :func:`lockdown_off` is called.
+
+    Windows Firewall never filters loopback (127.0.0.1 / ::1), so the local
+    proxy, the engine's API and the UI keep working - only real internet egress
+    is blocked. This is the fail-closed guard used at auto-start so nothing can
+    phone home before the proxy is actually intercepting. Needs admin.
+    """
+    if not _IS_WINDOWS:
+        return {"ok": False, "error": "windows only"}
+    script = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"Remove-NetFirewallRule -Group {_q(LOCKDOWN_GROUP)} 2>$null;"
+        "New-NetFirewallRule -DisplayName 'RCM-lockdown all out' "
+        f"-Group {_q(LOCKDOWN_GROUP)} -Direction Outbound -Action Block "
+        "-Profile Any -Enabled True | Out-Null;"
+        f"if (Get-NetFirewallRule -Group {_q(LOCKDOWN_GROUP)}) {{'OK'}} else {{'FAIL'}}"
+    )
+    r = _ps(script)
+    ok = "OK" in r["out"]
+    return {"ok": ok, "needs_admin": (not ok and not is_admin()),
+            "detail": (r["out"] + r["err"])[:400]}
+
+
+def lockdown_off() -> dict:
+    """Remove the kill-switch, restoring normal (default-allow) outbound."""
+    if not _IS_WINDOWS:
+        return {"ok": True}
+    r = _ps(
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"Remove-NetFirewallRule -Group {_q(LOCKDOWN_GROUP)} 2>$null;'OK'"
+    )
+    return {"ok": "OK" in r["out"]}

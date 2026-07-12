@@ -44,6 +44,9 @@ let appsFilter = "";
 let appsCat = "all";      // all | app | system | unknown
 let appsStatus = "all";   // all | new | allowed | blocked
 let appsData = null;
+// Which category sections / vendor groups the user has collapsed. Kept across
+// the periodic re-render so a minimized group stays minimized.
+const collapsedGroups = new Set();
 
 const CAT_LABELS = { app: "Applications", system: "System processes", unknown: "Unknown processes" };
 const CAT_ORDER = ["app", "system", "unknown"];
@@ -111,20 +114,34 @@ function renderApps() {
     const list = groups[key];
     if (!list.length) return;
     any = true;
-    const section = el("div", "apps-section");
+    const gkey = "cat:" + key;
+    const section = el("div", "apps-section" + (collapsedGroups.has(gkey) ? " collapsed" : ""));
     const head = el("div", "apps-section-head");
-    head.innerHTML = `<span>${CAT_LABELS[key]}</span><span class="muted small">${list.length}</span>`;
+    head.innerHTML =
+      `<span class="grp-title"><span class="apps-caret">▾</span>${CAT_LABELS[key]}</span>` +
+      `<span class="muted small">${list.length}</span>`;
+    const body = el("div", "apps-section-body");
+    renderCategory(body, list, key);
+    head.addEventListener("click", () => toggleGroup(section, gkey));
     section.appendChild(head);
-    renderCategory(section, list);
+    section.appendChild(body);
     grid.appendChild(section);
   });
   if (!any) grid.appendChild(el("div", "muted small", "No apps match these filters."));
 }
 
+// Collapse/expand a category section or vendor group, remembering the choice so
+// the next auto-refresh doesn't pop it back open.
+function toggleGroup(node, key) {
+  const collapsed = node.classList.toggle("collapsed");
+  if (collapsed) collapsedGroups.add(key);
+  else collapsedGroups.delete(key);
+}
+
 // Within a category, collapse a vendor's multiple processes (e.g. Norton's
 // several services) under one sub-heading. Single-process vendors and apps with
 // no known vendor render as plain cards above the grouped ones.
-function renderCategory(section, list) {
+function renderCategory(section, list, catKey) {
   const byVendor = new Map();
   list.forEach((a) => {
     const label = (a.group || "").trim();
@@ -144,12 +161,18 @@ function renderCategory(section, list) {
   }
   subGroups.sort((a, b) => a.label.localeCompare(b.label));
   subGroups.forEach((v) => {
+    const gkey = "cat:" + catKey + ":v:" + v.label.toLowerCase();
+    const grp = el("div", "apps-vendor" + (collapsedGroups.has(gkey) ? " collapsed" : ""));
     const sub = el("div", "apps-subhead");
-    sub.innerHTML = `<span>▸ ${escapeHtml(v.label)}</span><span class="muted small">${v.apps.length} processes</span>`;
-    section.appendChild(sub);
+    sub.innerHTML =
+      `<span class="grp-title"><span class="apps-caret">▾</span>${escapeHtml(v.label)}</span>` +
+      `<span class="muted small">${v.apps.length} processes</span>`;
     const sg = el("div", "apps-grid");
     v.apps.forEach((a) => sg.appendChild(appCard(a)));
-    section.appendChild(sg);
+    sub.addEventListener("click", () => toggleGroup(grp, gkey));
+    grp.appendChild(sub);
+    grp.appendChild(sg);
+    section.appendChild(grp);
   });
 }
 function appCard(a) {
@@ -178,7 +201,14 @@ function appCard(a) {
       <div><b>${a.blocked_count}</b>blocked</div>
     </div>
     ${hosts.length ? `<div class="app-hosts">${hosts.map(escapeHtml).join("<br>")}</div>` : `<div class="muted small">No destinations captured yet.</div>`}
+    <div class="app-domains-hint">Click to block specific domains ›</div>
     <div class="app-actions"></div>`;
+  // Click the card body (not the action buttons) to manage which domains this
+  // specific app is allowed to reach.
+  card.addEventListener("click", (e) => {
+    if (e.target.closest(".app-actions")) return;
+    openDomainModal(a);
+  });
   // real app icon (from its .exe) with a letter fallback
   const avatar = card.querySelector(".app-avatar");
   if (a.exe) {
@@ -214,6 +244,139 @@ function appCard(a) {
   actions.appendChild(soloBtn);
   return card;
 }
+// ---------------------------------------------------------------------------
+// Per-app domain blocking (click an app card)
+// ---------------------------------------------------------------------------
+// Blocking a domain "for an app" is just a rule scoped to that exe, so this
+// reuses the rules engine — no new backend needed.
+let domainApp = null;
+
+function blockRulePayload(appName, host) {
+  return {
+    name: `Block ${host} for ${appName}`,
+    enabled: true,
+    match: { host, app_scope: { type: "exe", value: appName } },
+    action: { type: "block", params: { status: 403 } },
+  };
+}
+// A rule that blocks `host` specifically for `appName` (exact host, exe scope).
+function findAppDomainRule(rules, appName, host) {
+  const an = appName.toLowerCase(), hn = host.toLowerCase();
+  return rules.find((r) =>
+    r.action && r.action.type === "block" &&
+    r.match && r.match.app_scope && r.match.app_scope.type === "exe" &&
+    String(r.match.app_scope.value || "").toLowerCase() === an &&
+    String(r.match.host || "").toLowerCase() === hn);
+}
+function cleanHost(v) {
+  return String(v || "").trim().toLowerCase()
+    .replace(/^[a-z]+:\/\//, "")   // strip scheme
+    .replace(/\/.*$/, "")           // strip path
+    .replace(/:\d+$/, "");          // strip port
+}
+
+async function openDomainModal(a) {
+  domainApp = a;
+  $("domainModalTitle").textContent = "Domains — " + a.name;
+  $("domainAddInput").value = "";
+  $("domainModal").hidden = false;
+  await renderDomainList();
+}
+function closeDomainModal() { $("domainModal").hidden = true; domainApp = null; }
+
+async function renderDomainList() {
+  const a = domainApp;
+  if (!a) return;
+  // Full domain usage for this app (busiest first), plus the current rules so we
+  // know which are already blocked. Fall back to the app card's capped host list
+  // if the engine predates the /apps/hosts endpoint.
+  const rules = await api("/rules");
+  let usage = null;
+  try { usage = await api("/apps/hosts?name=" + encodeURIComponent(a.name)); } catch (_) {}
+  const usageHosts = (usage && Array.isArray(usage.hosts))
+    ? usage.hosts
+    : (a.top_hosts || []);
+  const countByHost = new Map(usageHosts.map((h) => [String(h.host).toLowerCase(), h.count]));
+
+  const an = a.name.toLowerCase();
+  const blockedByHost = new Map();
+  rules.forEach((r) => {
+    if (r.action && r.action.type === "block" && r.match && r.match.app_scope &&
+        r.match.app_scope.type === "exe" &&
+        String(r.match.app_scope.value || "").toLowerCase() === an && r.match.host) {
+      blockedByHost.set(String(r.match.host).toLowerCase(), r);
+    }
+  });
+
+  // Ordered list: every domain the app has used (busiest first), then any
+  // blocked-by-rule domain it isn't currently talking to.
+  const order = [];
+  const seen = new Set();
+  usageHosts.forEach((h) => {
+    const host = h.host;
+    if (host && !seen.has(host.toLowerCase())) { seen.add(host.toLowerCase()); order.push(host); }
+  });
+  blockedByHost.forEach((r) => {
+    const host = r.match.host;
+    if (host && !seen.has(host.toLowerCase())) { seen.add(host.toLowerCase()); order.push(host); }
+  });
+
+  const list = $("domainList");
+  list.innerHTML = "";
+  $("domainCount").textContent = order.length
+    ? `${order.length} domain${order.length > 1 ? "s" : ""} seen — busiest first`
+    : "";
+  if (!order.length) {
+    list.appendChild(el("div", "muted small", "No domains seen for this app yet. Type one above to block it."));
+    return;
+  }
+  order.forEach((host) => {
+    const rule = blockedByHost.get(host.toLowerCase());
+    const blocked = !!rule;
+    const count = countByHost.get(host.toLowerCase());
+    const row = el("div", "domain-row" + (blocked ? " blocked" : ""));
+    const info = el("div", "domain-info");
+    info.appendChild(el("span", "domain-host", host));
+    info.appendChild(el("span", "domain-count",
+      count != null ? `${count.toLocaleString()} request${count === 1 ? "" : "s"}` : "not seen recently"));
+    row.appendChild(info);
+    if (blocked) row.appendChild(el("span", "domain-badge", "blocked"));
+    const btn = el("button", "btn btn-sm " + (blocked ? "" : "btn-warn"), blocked ? "Unblock" : "Block");
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      if (blocked) await del("/rules/" + rule.id);
+      else await post("/rules", blockRulePayload(a.name, host));
+      await renderDomainList();
+      loadApps();
+    });
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+async function addDomainBlock() {
+  const a = domainApp;
+  if (!a) return;
+  const host = cleanHost($("domainAddInput").value);
+  if (!host) return;
+  const rules = await api("/rules");
+  if (findAppDomainRule(rules, a.name, host)) {
+    toast(host + " is already blocked for " + a.name);
+  } else {
+    await post("/rules", blockRulePayload(a.name, host));
+    toast(`Blocked ${host} for ${a.name}`);
+  }
+  $("domainAddInput").value = "";
+  await renderDomainList();
+  loadApps();
+}
+
+$("domainModalClose").addEventListener("click", closeDomainModal);
+$("domainModalDone").addEventListener("click", closeDomainModal);
+$("domainModal").addEventListener("click", (e) => { if (e.target.id === "domainModal") closeDomainModal(); });
+$("domainAddBtn").addEventListener("click", addDomainBlock);
+$("domainAddInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addDomainBlock(); });
+
 $("appsFilter").addEventListener("input", (e) => { appsFilter = e.target.value.trim().toLowerCase(); renderApps(); });
 $("btnRefreshApps").addEventListener("click", loadApps);
 $("btnUnsolo").addEventListener("click", async () => { await post("/apps/policy", { action: "unsolo" }); loadApps(); });
@@ -267,6 +430,14 @@ function setActionCell(tr, f) {
     (f.req.matched && f.req.matched.length ? ` <span class="muted small" title="${escapeHtml(f.req.matched.join(', '))}">•</span>` : "");
   tr.classList.toggle("row-blocked", !!f.req.blocked);
   tr.classList.toggle("row-modified", !f.req.blocked && !!(f.req.modified || (f.resp && f.resp.modified)));
+  // A blocked request never hits the server, so show the status we return (403)
+  // right away so it's obvious in the feed which ones were stopped.
+  if (f.req.blocked && !f.resp) {
+    const sc = tr.querySelector(".status-cell");
+    const code = f.req.status || 403;
+    sc.textContent = code;
+    sc.className = "status-cell mono " + statusClass(code);
+  }
 }
 
 function onEvent(ev) {
@@ -381,25 +552,81 @@ async function pollState() {
     renderPills(s);
     renderQuarantine(s.pending_apps);
     if ($("tab-settings").classList.contains("active")) applyStateToSettings(s);
+    if ($("tab-activity").classList.contains("active")) applyActivity(s);
   } catch (_) { renderOffline(); }
 }
 function pill(id, cls, txt) { const p = $(id); p.className = "pill " + cls; p.textContent = txt; }
+
+// Baseline for the live per-second rates (delta between /state polls).
+let lastRate = null;
+
 function renderPills(s) {
-  pill("pill-proxy", s.proxy_active ? "ok" : "bad", s.proxy_active ? `proxy on :${s.settings.proxy_port}` : "proxy off");
   const sp = s.system_proxy || {};
-  pill("pill-system", sp.pointing_at_us ? "ok" : "", sp.pointing_at_us ? "system proxy → monitor" : "system proxy off");
-  const c = s.cert || {};
-  pill("pill-cert", c.trusted ? "ok" : "warn", c.trusted ? "certificate trusted" : "certificate not trusted");
-  if (s.settings.current_app_only) {
+  const cert = s.cert || {};
+  const st = s.settings || {};
+  const stats = s.stats || {};
+
+  // Proxy status — one pill that reflects whether you're actually protected:
+  // the local proxy must be up, Windows must be routing to it, and the cert must
+  // be trusted (otherwise HTTPS can't be inspected).
+  if (!s.proxy_active) {
+    pill("pill-proxy", "bad", "proxy off");
+  } else if (st.paused) {
+    pill("pill-proxy", "warn", "paused");
+  } else if (!sp.pointing_at_us) {
+    pill("pill-proxy", "warn", "proxy up · not routing");
+  } else if (cert.available && cert.trusted === false) {
+    pill("pill-proxy", "warn", "proxy on · cert untrusted");
+  } else {
+    pill("pill-proxy", "ok", `proxy on :${st.proxy_port}`);
+  }
+
+  // Live per-second throughput, averaged over the interval since the last poll:
+  // the accent pill is what got through (accepted), the red one is what's being
+  // blocked right now.
+  const now = performance.now();
+  const reqTotal = stats.requests || 0;
+  const blkTotal = stats.blocked || 0;
+  let allowedRate = 0, blockedRate = 0;
+  if (lastRate && now > lastRate.t) {
+    const dt = (now - lastRate.t) / 1000;
+    const dReq = reqTotal - lastRate.req;
+    const dBlk = blkTotal - lastRate.blocked;
+    if (dt > 0 && dReq >= 0 && dBlk >= 0) {
+      allowedRate = Math.max(0, dReq - dBlk) / dt;
+      blockedRate = dBlk / dt;
+    }
+  }
+  lastRate = { req: reqTotal, blocked: blkTotal, t: now };
+  pill("pill-rate", "accent", `${Math.round(allowedRate)} req/s`);
+  const br = Math.round(blockedRate);
+  pill("pill-blocked", br > 0 ? "bad" : "", `${br} blocked/s`);
+
+  // New apps awaiting a decision — only shown when there are any.
+  const pend = (s.pending_apps || []).length;
+  const pp = $("pill-pending");
+  if (pend > 0) { pp.hidden = false; pill("pill-pending", "warn", `${pend} new app${pend > 1 ? "s" : ""} waiting`); }
+  else pp.hidden = true;
+
+  // Focus scope — only shown when narrowed to the current app.
+  const fp = $("pill-focus");
+  if (st.current_app_only) {
+    fp.hidden = false;
     const fg = s.foreground && s.foreground.name ? s.foreground.name : "…";
-    pill("pill-focus", "warn", `focus: ${s.settings.focus_mode} · ${fg}`);
-  } else pill("pill-focus", "", "all apps");
-  const paused = s.settings.paused;
+    pill("pill-focus", "warn", `focus: ${st.focus_mode} · ${fg}`);
+  } else { fp.hidden = true; }
+
+  const paused = st.paused;
   $("btnPause").textContent = paused ? "Resume" : "Pause";
   $("btnPause").className = "btn " + (paused ? "btn-primary" : "btn-warn");
 }
 function renderOffline() {
+  lastRate = null;
   pill("pill-proxy", "bad", "engine offline");
+  pill("pill-rate", "", "— req/s");
+  pill("pill-blocked", "", "— blocked/s");
+  $("pill-pending").hidden = true;
+  $("pill-focus").hidden = true;
 }
 
 $("btnPause").addEventListener("click", async () => {
@@ -580,6 +807,8 @@ $("btnRefreshSessions").addEventListener("click", loadSessions);
 // Activity
 // ===========================================================================
 async function loadActivity(date) {
+  // Fill the summary (stats + top processes) at the top of the tab right away.
+  if (lastState) applyActivity(lastState);
   const data = await api("/logs/activity" + (date ? "?date=" + encodeURIComponent(date) : ""));
   const sel = $("activityDay");
   if (!sel.dataset.filled || !date) {
@@ -624,13 +853,16 @@ function applyStateToSettings(s) {
   $("certLine").innerHTML = c.available
     ? `CA present: <b>${c.exists ? "yes" : "no"}</b> · trusted by Windows: <b>${c.trusted ? "yes" : "no"}</b>`
     : "Certificate management is Windows-only.";
-  applyActivity(s);
 }
 
 function applyActivity(s) {
   const st = s.stats || {};
-  $("statBlocked").textContent = (st.blocked || 0).toLocaleString();
-  $("statRequests").textContent = (st.requests || 0).toLocaleString();
+  const requests = st.requests || 0;
+  const blocked = st.blocked || 0;
+  const allowed = Math.max(0, requests - blocked);
+  $("statRequests").textContent = requests.toLocaleString();
+  $("statAllowed").textContent = allowed.toLocaleString();
+  $("statBlocked").textContent = blocked.toLocaleString();
   const wrap = $("topApps"); wrap.innerHTML = "";
   const top = s.top_apps || [];
   if (!top.length) { wrap.appendChild(el("div", "muted small", "No traffic yet.")); return; }
@@ -673,7 +905,7 @@ $("tglGuard").addEventListener("change", async (e) => {
 function paintStartup(on) {
   if (document.activeElement !== $("tglStartup")) $("tglStartup").checked = on;
   $("startupLine").textContent = on
-    ? "On — starts at sign-in, minimized to the tray"
+    ? "On — elevated at sign-in (UAC each time); blocks all traffic until the proxy is up"
     : "Off — start it yourself";
 }
 async function refreshStartup() {
@@ -687,7 +919,7 @@ $("tglStartup").addEventListener("change", async (e) => {
     const r = await window.rcm.setLaunchAtLogin(e.target.checked);
     const on = !!(r && r.openAtLogin);
     paintStartup(on);
-    toast(on ? "Will launch at Windows sign-in" : "Won't launch at startup anymore");
+    toast(on ? "Will launch elevated at sign-in (asks for admin each time)" : "Won't launch at startup anymore");
   } catch (_) {
     toast("Couldn't change the startup setting");
     refreshStartup();
@@ -716,7 +948,10 @@ function showPanel(name) {
 }
 $("btnViewLogs").addEventListener("click", () => { showPanel("logs"); loadSessions(); });
 $("btnLogsBack").addEventListener("click", () => { showPanel("settings"); syncSettings(); });
-$("btnViewActivity").addEventListener("click", () => { showPanel("activity"); loadActivity(); });
+$("btnViewActivity").addEventListener("click", () => {
+  const sec = document.getElementById("systemActivity");
+  if (sec) sec.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 
 // ===========================================================================
 // New-app guard — corner notifications for apps blocked on first connection
