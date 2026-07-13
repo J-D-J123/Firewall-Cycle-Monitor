@@ -144,6 +144,22 @@ def create_app(ctx, system_proxy, cert_manager, proxy_controller) -> FastAPI:
         elif action == "proxy_off":
             ctx.settings.proxy_enabled = False
             result["system_proxy"] = system_proxy.disable()
+        elif action == "set_block_ping":
+            import firewall
+            ctx.settings.block_ping = bool(data.get("value"))
+            if firewall.is_admin():
+                fn = firewall.block_icmp if ctx.settings.block_ping else firewall.unblock_icmp
+                result["firewall"] = await asyncio.to_thread(fn)
+            result["is_admin"] = firewall.is_admin()
+        elif action == "set_strict_mode":
+            import firewall, sys
+            ctx.settings.strict_mode = bool(data.get("value"))
+            if firewall.is_admin():
+                if ctx.settings.strict_mode:
+                    result["firewall"] = await asyncio.to_thread(firewall.strict_on, [sys.executable])
+                else:
+                    result["firewall"] = await asyncio.to_thread(firewall.strict_off)
+            result["is_admin"] = firewall.is_admin()
         else:
             result = {"ok": False, "error": f"unknown action {action!r}"}
         save_settings(ctx.settings)
@@ -211,9 +227,15 @@ def create_app(ctx, system_proxy, cert_manager, proxy_controller) -> FastAPI:
             blocked[name.lower()] = name
             allowed.pop(name.lower(), None)
             ctx.resolve_app(name)  # decided -> leave quarantine
+            # "Block a program by name" (e.g. ping.exe) sends no path — resolve it
+            # so the firewall rule (which needs a full path) can be created.
+            if not exe:
+                exe = _resolve_program(name)
             if exe:
                 paths[exe.lower()] = exe
                 fw = await asyncio.to_thread(firewall.block_app, exe)
+            else:
+                fw = {"ok": False, "error": f"couldn't find the program '{name}' on disk"}
         elif action in ("unblock", "allow") and name:
             blocked.pop(name.lower(), None)
             # Remember the approval so the new-app guard won't re-quarantine it.
@@ -240,6 +262,41 @@ def create_app(ctx, system_proxy, cert_manager, proxy_controller) -> FastAPI:
         return {"ok": True, "solo_app": s.solo_app, "blocked_apps": s.blocked_apps,
                 "allowed_apps": s.allowed_apps, "firewall": fw,
                 "is_admin": firewall.is_admin()}
+
+    @app.post("/apps/proto")
+    async def apps_proto(request: Request) -> dict[str, Any]:
+        """Block/unblock a single protocol (ping or QUIC) for one app — the
+        firewall half of the request-blocker popup."""
+        import firewall
+        data = await request.json()
+        name = (data.get("name") or "").strip()
+        exe = (data.get("exe") or "").strip()
+        proto = (data.get("proto") or "").strip().lower()
+        block = bool(data.get("block"))
+        if proto not in ("icmp", "quic"):
+            return {"ok": False, "error": "proto must be 'icmp' or 'quic'"}
+        if not exe:
+            exe = _resolve_program(name)
+        s = ctx.settings
+        # drop any existing record for this (app, proto)
+        lst = [b for b in s.app_proto_blocks if not (
+            b.get("proto") == proto and (
+                (exe and str(b.get("exe", "")).lower() == exe.lower()) or
+                (name and str(b.get("name", "")).lower() == name.lower())))]
+        fw: dict[str, Any] = {}
+        if block:
+            if not exe:
+                return {"ok": False, "error": f"couldn't find the program '{name}' on disk"}
+            lst.append({"name": name or exe.replace("/", "\\").rsplit("\\", 1)[-1],
+                        "exe": exe, "proto": proto})
+            if firewall.is_admin():
+                fw = await asyncio.to_thread(firewall.block_app_proto, exe, proto)
+        elif exe and firewall.is_admin():
+            fw = await asyncio.to_thread(firewall.unblock_app_proto, exe, proto)
+        s.app_proto_blocks = lst
+        save_settings(s)
+        return {"ok": True, "firewall": fw, "is_admin": firewall.is_admin(),
+                "app_proto_blocks": s.app_proto_blocks}
 
     # ------------------------------------------------------------------ #
     # Certificate
@@ -299,6 +356,28 @@ def create_app(ctx, system_proxy, cert_manager, proxy_controller) -> FastAPI:
         return {"ok": True}
 
     return app
+
+
+def _resolve_program(name: str) -> str:
+    """Best-effort full path for a program named e.g. 'ping.exe' — needed because
+    firewall rules must reference a path. Returns '' if it can't be found."""
+    import os
+    import shutil
+    name = (name or "").strip()
+    if not name:
+        return ""
+    if "\\" in name or "/" in name:      # already a path
+        return name
+    base = name if name.lower().endswith(".exe") else name + ".exe"
+    cand = shutil.which(base) or shutil.which(base[:-4])
+    if cand:
+        return cand
+    sysroot = os.environ.get("SystemRoot", r"C:\Windows")
+    for sub in ("System32", "SysWOW64", ""):
+        guess = os.path.join(sysroot, sub, base) if sub else os.path.join(sysroot, base)
+        if os.path.exists(guess):
+            return guess
+    return ""
 
 
 def _do_replay(ctx, data: dict[str, Any]) -> dict[str, Any]:

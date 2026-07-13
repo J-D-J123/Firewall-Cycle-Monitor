@@ -57,6 +57,15 @@ class Settings:
     allowed_apps: list[str] = field(default_factory=list)
     # Send privacy signals (Do-Not-Track / Global Privacy Control) on requests.
     add_privacy_headers: bool = False
+    # --- Firewall (non-HTTP) blocking, all needs admin -------------------
+    # Block outbound ping (ICMP echo) from the whole PC.
+    block_ping: bool = False
+    # Strict mode: default-deny outbound; only traffic through the monitor
+    # (plus DNS/DHCP) is allowed. Blocks ping, QUIC, raw UDP/TCP, etc.
+    strict_mode: bool = False
+    # Per-app protocol blocks from the request-blocker popup:
+    #   [{"name": "chrome.exe", "exe": "C:\\...\\chrome.exe", "proto": "icmp"|"quic"}]
+    app_proto_blocks: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -280,9 +280,32 @@ async function openDomainModal(a) {
   $("domainModalTitle").textContent = "Domains — " + a.name;
   $("domainAddInput").value = "";
   $("domainModal").hidden = false;
+  syncProtoToggles();
   await renderDomainList();
 }
 function closeDomainModal() { $("domainModal").hidden = true; domainApp = null; }
+
+// Per-app firewall (non-web) blocks — reflected from the persisted settings.
+function syncProtoToggles() {
+  const a = domainApp;
+  if (!a) return;
+  const protos = (lastState && lastState.settings && lastState.settings.app_proto_blocks) || [];
+  const an = a.name.toLowerCase(), ae = (a.exe || "").toLowerCase();
+  const has = (p) => protos.some((b) => b.proto === p &&
+    (String(b.name || "").toLowerCase() === an || (ae && String(b.exe || "").toLowerCase() === ae)));
+  $("protoIcmp").checked = has("icmp");
+  $("protoQuic").checked = has("quic");
+}
+async function setProto(proto, block) {
+  const a = domainApp;
+  if (!a) return;
+  const res = await post("/apps/proto", { name: a.name, exe: a.exe, proto, block });
+  const fw = res.firewall || {};
+  if (fw.needs_admin) toast("Saved — relaunch as administrator (start.cmd) to enforce.");
+  else toast(`${block ? "Blocked" : "Unblocked"} ${proto === "icmp" ? "ping" : "QUIC"} for ${a.name}`);
+  await pollState();
+  syncProtoToggles();
+}
 
 async function renderDomainList() {
   const a = domainApp;
@@ -376,6 +399,8 @@ $("domainModalDone").addEventListener("click", closeDomainModal);
 $("domainModal").addEventListener("click", (e) => { if (e.target.id === "domainModal") closeDomainModal(); });
 $("domainAddBtn").addEventListener("click", addDomainBlock);
 $("domainAddInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addDomainBlock(); });
+$("protoIcmp").addEventListener("change", (e) => setProto("icmp", e.target.checked));
+$("protoQuic").addEventListener("change", (e) => setProto("quic", e.target.checked));
 
 $("appsFilter").addEventListener("input", (e) => { appsFilter = e.target.value.trim().toLowerCase(); renderApps(); });
 $("btnRefreshApps").addEventListener("click", loadApps);
@@ -853,6 +878,11 @@ function applyStateToSettings(s) {
   $("certLine").innerHTML = c.available
     ? `CA present: <b>${c.exists ? "yes" : "no"}</b> · trusted by Windows: <b>${c.trusted ? "yes" : "no"}</b>`
     : "Certificate management is Windows-only.";
+  // Firewall toggle (needs admin to actually enforce)
+  const admin = !!s.is_admin;
+  if (document.activeElement !== $("tglStrict")) $("tglStrict").checked = !!s.settings.strict_mode;
+  $("strictLine").textContent = s.settings.strict_mode
+    ? (admin ? "On — only monitored traffic allowed out" : "On — needs admin to enforce") : "Off";
 }
 
 function applyActivity(s) {
@@ -899,6 +929,26 @@ $("tglGuard").addEventListener("change", async (e) => {
   await post("/control", { action: "set_guard_new_apps", value: e.target.checked });
   await pollState();
 });
+$("tglStrict").addEventListener("change", async (e) => {
+  const r = await post("/control", { action: "set_strict_mode", value: e.target.checked });
+  if (r && r.is_admin === false) toast("Saved — relaunch as administrator (start.cmd) to enforce strict mode.");
+  else if (e.target.checked) toast("Strict mode on — only traffic through the monitor is allowed out. Quit the app to restore.");
+  await pollState();
+});
+async function blockProgram() {
+  const name = $("blockProgramInput").value.trim();
+  if (!name) return;
+  const res = await post("/apps/policy", { action: "block", name });
+  const msg = $("blockProgramMsg");
+  const fw = res.firewall || {};
+  if (fw.ok === false && fw.error) msg.textContent = "Couldn't block: " + fw.error;
+  else if (fw.needs_admin) msg.textContent = `Saved “${name}”, but relaunch as administrator to actually cut it off.`;
+  else msg.textContent = `Blocked ${name} — see it in the Apps tab to un-block.`;
+  $("blockProgramInput").value = "";
+  loadApps();
+}
+$("blockProgramBtn").addEventListener("click", blockProgram);
+$("blockProgramInput").addEventListener("keydown", (e) => { if (e.key === "Enter") blockProgram(); });
 
 // Launch at Windows login. This lives in the OS (per-user Run key) rather than
 // the engine's state, so we read/write it through the Electron bridge directly.

@@ -254,6 +254,29 @@
             </div>
           </div>
         </div>
+
+        <h3 class="settings-h">Firewall — blocks non-web traffic (needs admin)</h3>
+        <div class="settings-grid">
+          <div class="card" style="grid-column:1 / -1">
+            <div class="card-head"><h2>Strict mode</h2></div>
+            <div class="row-between">
+              <div><strong>Block everything except the monitor</strong>
+                <div class="muted small" id="strictLine">—</div></div>
+              <label class="switch"><input type="checkbox" id="tglStrict" /><span></span></label>
+            </div>
+            <p class="muted small"><b>Default-deny:</b> only traffic that goes through the monitor (plus DNS) is allowed out — this is the switch that also blocks <b>ping</b>, QUIC, and any app that bypasses the proxy. Powerful but broad; it's fully restored the moment you quit the app.</p>
+          </div>
+
+          <div class="card" style="grid-column:1 / -1">
+            <div class="card-head"><h2>Block a program</h2></div>
+            <p class="muted small">Cut off <b>all</b> network for one program by name — even one not in the Apps list (e.g. <span class="mono">ping.exe</span>). It then appears in the Apps tab where you can un-block it.</p>
+            <div class="domain-add">
+              <input id="blockProgramInput" class="input" placeholder="program name or full path, e.g. ping.exe" />
+              <button id="blockProgramBtn" class="btn btn-warn btn-sm">Block program</button>
+            </div>
+            <div id="blockProgramMsg" class="muted small" style="margin-top:8px"></div>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -356,6 +379,11 @@
       <div class="domain-add">
         <input id="domainAddInput" class="input" placeholder="block a domain, e.g. clients4.google.com" />
         <button id="domainAddBtn" class="btn btn-primary btn-sm">Block</button>
+      </div>
+      <div class="domain-proto">
+        <span class="muted small">Non-web traffic (firewall, needs admin):</span>
+        <label class="check"><input type="checkbox" id="protoIcmp" /> Block ping (ICMP)</label>
+        <label class="check"><input type="checkbox" id="protoQuic" /> Block QUIC (UDP&nbsp;443)</label>
       </div>
       <div id="domainCount" class="muted small" style="margin-top:12px"></div>
       <div id="domainList" class="domain-list"></div>

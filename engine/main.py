@@ -162,8 +162,17 @@ def main() -> int:
             if firewall.is_admin():
                 firewall.clear_all()
                 firewall.reapply(settings.blocked_app_paths)
+                # Re-apply the non-HTTP blocks that persist across restarts.
+                firewall.reapply_protos(settings.app_proto_blocks)
+                (firewall.block_icmp if settings.block_ping else firewall.unblock_icmp)()
+                if settings.strict_mode:
+                    firewall.strict_on([sys.executable])
+                else:
+                    firewall.strict_off()  # recover a crashed strict run
                 print(f"[startup] firewall enforcement active (admin); "
-                      f"{len(settings.blocked_app_paths)} app(s) blocked",
+                      f"{len(settings.blocked_app_paths)} app(s) blocked, "
+                      f"ping_block={settings.block_ping} strict={settings.strict_mode} "
+                      f"proto_blocks={len(settings.app_proto_blocks)}",
                       file=sys.stderr)
             else:
                 print("[startup] not elevated: per-app blocking limited to the "
@@ -201,9 +210,13 @@ def main() -> int:
             import firewall
             if firewall.is_admin():
                 firewall.clear_all()
-                # Always drop the kill-switch on the way out so quitting the app
-                # (from the tray) is a guaranteed way to restore full network.
+                # Always drop every firewall block on the way out so quitting the
+                # app (from the tray) is a guaranteed way to restore full network.
                 firewall.lockdown_off()
+                firewall.unblock_icmp()
+                firewall.strict_off()
+                firewall._ps("$ErrorActionPreference='SilentlyContinue';"
+                             f"Remove-NetFirewallRule -Group {firewall._q(firewall.PROTO_GROUP)} 2>$null")
         except Exception:
             pass
         try:
