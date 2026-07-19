@@ -158,3 +158,6 @@ engine\.venv\Scripts\python.exe engine\main.py --api-port 8788 --proxy-port 8080
   monitor* is on (Settings) and the top pill shows `system proxy → monitor`.
 - **Port already in use** — set `RCM_API_PORT` / `RCM_PROXY_PORT` environment
   variables before launching to change the ports.
+
+
+  Application made by Claude
